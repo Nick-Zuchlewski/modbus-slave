@@ -1,0 +1,107 @@
+#syntax=docker/dockerfile:1.2
+#---------------------------------------------------------------------------------------------------
+# Build
+# Descrption: This dockerfile is responsible building the production image
+#---------------------------------------------------------------------------------------------------
+ 
+# declare arguments with defaults
+# Docker - The images used
+ARG DOCKER_BUILD_IMAGE=golang:1.20.0-alpine3.17
+ARG DOCKER_PROD_IMAGE=alpine:3.15.0
+ARG PLATFORM=linux/arm64
+# APP - Meta info about the application
+ARG APP_GIT_COMMIT=unspecified
+ARG APP_NAME=unspecified
+ARG APP_VERSION=unspecified
+ARG APP_MAINTAINERS="Drew.Peries@nov.com"
+# GO - Golang related settings
+ARG GO_ARCH="amd64"
+ARG GO_FLAGS="-ldflags=-w -ldflags=-s"
+# ARG GO_Z=-ldflags="-X main.Commit=${APP_GIT_COMMIT}"
+ 
+ 
+#---------------------------------------------------------------------------------------------------
+# Section: Build
+# Description: The build will cross-compose (using go build) to the specified target based on
+# build platform
+#---------------------------------------------------------------------------------------------------
+ 
+# build stage
+FROM ${DOCKER_BUILD_IMAGE} AS builder
+LABEL stage=build
+# declare arguments within this scope
+# note: Target OS and Arch come from Build Platform
+ARG APP_GIT_COMMIT
+ARG APP_VERSION
+ARG GO_ARCH
+ARG GO_FLAGS
+# ARG GO_Z
+ 
+# set environmental variables to build for appropriate architecture
+ENV GOARCH $GO_ARCH
+ENV GOOS linux
+ENV GOPATH /go
+ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
+# disable CGO ??what is this
+ENV CGO_ENABLED=0
+ 
+# echo whats cooking good lookin'
+RUN echo Target OS: linux
+RUN echo Target ARCH: $GOARCH
+RUN echo git Commit: $APP_GIT_COMMIT
+RUN echo Service Name: $APP_NAME
+ 
+# change working directory
+WORKDIR /app/
+ 
+# Copy the go.mod and go.sum files
+COPY src/go.mod src/go.sum ./src/
+COPY src/ ./src/
+ 
+# Move to the src directory where the go.mod file is located
+WORKDIR /app/src
+ 
+# Download and install any required third-party dependencies
+RUN go mod tidy
+# Build the Go app
+#RUN go build -o /app/main cmd/main.go
+ 
+# TODO: set ld flags - seems important
+# https://www.digitalocean.com/community/tutorials/using-ldflags-to-set-version-information-for-go-applications
+RUN GOOS=linux GOARCH=${GO_ARCH} go build ${GO_FLAGS} -ldflags="-X 'main.Version=${APP_VERSION}' -X 'main.Commit=${APP_GIT_COMMIT}'" ${GO_Z} -o /app/main cmd/main.go
+ 
+#---------------------------------------------------------------------------------------------------
+# Section: Production
+# Description: The production stage is the distributed artifact
+#---------------------------------------------------------------------------------------------------
+ 
+# production
+FROM --platform=${GO_ARCH} ${DOCKER_PROD_IMAGE}
+LABEL stage=prod
+ 
+# declare arguments within this scope
+ARG TARGETOS
+ARG TARGETARCH
+ARG APP_NAME
+ARG APP_VERSION
+ARG APP_MAINTAINERS
+ARG APP_GIT_COMMIT
+ 
+# Set the working directory inside the container
+WORKDIR /app/
+ 
+# Copy the pre-built binary from the builder stage
+COPY --from=builder /app/main .
+
+# meta
+LABEL os=${TARGETOS}
+LABEL arch=${TARGETARCH}
+LABEL version=${APP_VERSION}
+LABEL maintainer=${APP_MAINTAINERS}
+LABEL title=${APP_VERSION}
+LABEL commit=${APP_GIT_COMMIT}
+ 
+EXPOSE 502
+ 
+# Command to run the executable
+CMD [ "./main" ]
